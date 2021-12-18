@@ -11,9 +11,21 @@
 	    
 	
 #define LEDC1 PC5
-#define LEDC2 PC4
 #define LEDB1 PB6
 #define LEDB2 PB7
+
+#define ANA1 PC4
+#define ANA2 PC3
+#define ANA3 PC2
+
+#define INT1 PC1
+#define INT2 PC0
+
+#define DIG1 PB2
+#define DIG2 PB1
+
+#define PWM1 PD5
+#define PWM2 PD6
 
 int32_t led_brightness = 0;
 
