@@ -2,6 +2,7 @@
 import tkinter as tk
 import time
 from threading import Thread, Lock
+from typing import BinaryIO
 from serial import Serial, SerialException
 import queue
 from math import log10, floor
@@ -101,18 +102,16 @@ class SerialInterface(tk.Tk):
         self.send_msg(str(spd))
 
     def send_msg(self, msg):
-        print("sent", msg)
         self._send_queue.put(msg)
         
     def recieve_msg(self):
         msg = self._rec_queue.get(block=True)
-        print("rec", msg)
         return msg
 
 
 class DummySerial():
     def __init__(self):
-        self._queue = queue.Queue(maxsize = 50)
+        self._list = []
         self._spd = 0
         self._tar_spd = 0
 
@@ -122,7 +121,7 @@ class DummySerial():
         t1=Thread(target=self._move_towards_target)
         t1.start()
 
-    def write(self, msg):
+    def write(self, msg :bytes):
         msg :str = msg.decode('ascii')
 
         if self._getspd_bool:
@@ -134,27 +133,30 @@ class DummySerial():
 
             self._getspd_bool = False
 
-        if msg == "getspd":
+        elif msg == "getspd":
             spd = str(round_sig(self._spd, 6))
-            self._queue.put(spd.encode('ascii'))
+            self._list.append(spd.encode('ascii'))
 
         elif msg == "setspd":
             self._getspd_bool = True
             
 
         else:
-            self._queue.put(msg.encode('ascii'))
+            self._list.append(msg.encode('ascii'))
 
 
     def read(self, n=1):
-        msg = self._queue.get()
-        return msg
+        if len(self._list):
+            msg = self._list.pop(0)
+
+            return msg
+        else:
+            return "".encode('ascii')
 
     def _move_towards_target(self):
         while True:
-            print(list(self._queue))
-            self._spd += (self._tar_spd - self._spd)/2
-            time.sleep(0.5)
+            self._spd += (self._tar_spd - self._spd)/4
+            time.sleep(0.437)
 
 def round_sig(x, sig=2):
     if x == 0:
