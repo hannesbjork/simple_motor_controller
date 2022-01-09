@@ -5,11 +5,14 @@
  *  Author: ehbjork
  */ 
 
-#include <avr/io.h> // This contains the definitions of the terms used
+// Imports
+#include <avr/io.h>
 #include <avr/interrupt.h>
+
 #include <stdbool.h>
+#include <math.h>
 	    
-	
+// Define ports
 #define LEDC1 PC5
 #define LEDB1 PB6
 #define LEDB2 PB7
