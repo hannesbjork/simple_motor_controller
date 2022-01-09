@@ -2,6 +2,7 @@
 import tkinter as tk
 import time
 from threading import Thread, Lock
+from tkinter.constants import OFF
 from typing import BinaryIO
 from serial import Serial, SerialException
 import queue
@@ -45,16 +46,22 @@ class SerialInterface(tk.Tk):
   
   
         self.act_spd_var = tk.StringVar()
-        self.act_spd_var.set('0.0')
+        self.act_spd_var.set('0')
         tk.Label(self, text="Actual speed").grid(row=2,column=1, columnspan=2)
         self.targ_spd_label = tk.Label(self, textvariable=self.act_spd_var)
         self.targ_spd_label.grid(row=3,column=1, columnspan=2)
   
         self.tar_spd_var = tk.StringVar()
-        self.tar_spd_var.set('0.0')
+        self.tar_spd_var.set('0')
         tk.Label(self, text="Target speed").grid(row=4,column=1, columnspan=2)
+        
         self.targ_spd_label = tk.Label(self, textvariable=self.tar_spd_var)
         self.targ_spd_label.grid(row=5,column=1, columnspan=2)
+
+        self.offset_var = tk.StringVar()
+        self.offset_var.set('+0')
+        self.offset_label = tk.Label(self, textvariable=self.offset_var)
+        self.offset_label.grid(row=6,column=1, columnspan=2)
 
 
 
@@ -64,6 +71,7 @@ class SerialInterface(tk.Tk):
 
         self.y_ref = [0 for _ in range(15)]
         self.y_act = [0 for _ in range(15)]
+        self.y_off = [0 for _ in range(15)]
 
         plt.ion()
 
@@ -72,15 +80,16 @@ class SerialInterface(tk.Tk):
         
         self.line_act, = ax.plot(x, self.y_act, 'r-')
         self.line_ref, = ax.plot(x, self.y_ref, 'b.')
+        self.line_off, = ax.plot(x, self.y_off, 'g.')
 
-        ax.set_ylim([0, 100])
+        ax.set_ylim([0, 150])
         ax.set_xlim([0, 15])
     
         self.canvas = FigureCanvasTkAgg(fig, master = self)  
         #self.canvas.draw()
         self._update_plot()
 
-        self.canvas.get_tk_widget().grid(row=6,column=1, columnspan=2)
+        self.canvas.get_tk_widget().grid(row=7,column=1, columnspan=2)
 
 
 
@@ -99,7 +108,7 @@ class SerialInterface(tk.Tk):
 
         self.after(100, self._update_plot)
 
-    def insert_plot_data(self, ref, act):
+    def insert_plot_data(self, ref, act, off):
         #return
 
         self._plot_mutex.acquire()
@@ -107,12 +116,15 @@ class SerialInterface(tk.Tk):
 
         self.y_ref.pop(0)
         self.y_act.pop(0)
+        self.y_off.pop(0)
 
         self.y_ref.append(ref)
         self.y_act.append(act)
+        self.y_off.append(off)
 
         self.line_ref.set_ydata(self.y_ref)
         self.line_act.set_ydata(self.y_act)
+        self.line_off.set_ydata(self.y_off)
 
         self._plot_mutex.release()
 
@@ -156,7 +168,6 @@ class SerialInterface(tk.Tk):
                 self._act_speed = spd
                 self.act_spd_var.set( str(spd) )
 
-                self.insert_plot_data(self._tar_speed, spd)
             except ValueError:
                 print("Not vaild msg.")
 
@@ -173,8 +184,17 @@ class SerialInterface(tk.Tk):
             time.sleep(0.05)
 
             msg = self._serial.read(3)
-            if msg:
-                print("set",int(msg))
+            
+            print("set",int(msg))
+
+            offset = int(int(msg) - self._tar_speed)
+            if offset < 0:
+                offset_text = "-" + str(abs(offset))
+            else:
+                offset_text = "+" + str(offset)
+            self.offset_var.set( offset_text )
+
+            self.insert_plot_data(self._tar_speed, spd, offset+self._tar_speed)
 
             time.sleep(0.05)
 
@@ -186,7 +206,7 @@ class SerialInterface(tk.Tk):
         self._tar_speed = speed
         self.tar_spd_var.set( str(speed) )
 
-
+    
 
 
     #def send_msg(self, msg):

@@ -16,16 +16,20 @@
 #include <time.h>
 
 
+// Define constants
 
 #define BAUD 4800
-
 #define F_CPU 1000000
-
 #define MYUBRR F_CPU/16/BAUD-1
 
+#define int_scale 6
+#define filter_len 32
 
+int Kp = 16;
+int Ki = 4;
 	    
 // Define ports
+
 #define LEDC1 PC5
 #define LEDB1 PB6
 #define LEDB2 PB7
@@ -43,30 +47,26 @@
 #define PWM1 PD5
 #define PWM2 PD6
 
+// Define variables
 
-#define int_scale 6
+unsigned char command;
 
-#define mov_avg_size 32
-
-
-unsigned char command = 0;
 unsigned char speed = 0;
-unsigned char pos = 0;
-unsigned char speedSetpoint = 0;
-unsigned char posSetpoint = 0;
-int32_t speedOutput = 0;
-unsigned char test = 0;
-int cycles[mov_avg_size] =  {0};
-int cyclePos = 0;
-int32_t total = 0;
-int i = 0;
+unsigned char speed_setpoint = 0;
 
-bool newPulse = false;
-bool updatePI = false;
+int cycles[filter_len] =  {0};
+int cycles_pointer = 0;
+int32_t cycles_total = 0;
+
+int i = 0;
+int p = 0;
+
+bool flag_recieved_interrupt = false;
+bool flag_update_controller = false;
 
 char snum[5];
-char* cmdstr;
-volatile char count;
+
+int tune;
 
 
 void initUSART(unsigned int);
@@ -81,22 +81,24 @@ void USART_sendString(char *str);
 ISR(PCINT1_vect){
 
 	int temp = TCNT1;
-	if(temp > 250){		//>520 ger att allt över 150rpm ignoreras.=> för lågt värde. Men datan kanske är normalfördelad så måste ta med båda sidor?
+	if(temp > 250){	
 		TCNT1 = 0;
-		cycles[cyclePos] = temp;
-		if(cyclePos < mov_avg_size-1){
-			++cyclePos;
+		cycles[cycles_pointer] = temp;
+		if(cycles_pointer < filter_len-1){
+			++cycles_pointer;
 		}else{
-		cyclePos = 0;
+		cycles_pointer = 0;
 		}
-		newPulse = true;
+		flag_recieved_interrupt = true;
 	}	
 }
 
 ISR(TIMER2_COMPA_vect){	//Controller should be synchronous. Does that mean that the PI should update the output in the same rate as the encoder gives inputs?
-	updatePI = true;
+	flag_update_controller = true;
 	TCNT2 = 0;
 }
+
+
 
 // Inits
 
@@ -107,9 +109,11 @@ void initLED(void){
 }
 
 void initANA(void){
+    DDRC &= 0b11111011;
 
     ADMUX = 0b01100010;
     ADCSRA = 0b10000111;
+
 }
 
 void initPWM(void){
@@ -121,10 +125,10 @@ void initPWM(void){
 
 void initINT(void){
 
-    DDRC &= 0b11111101;
+    DDRC &= 0b11111100;
 
 	PCICR |= 0b00000010; // Select PCINT 8-14.
-	PCMSK1 = 0b00000010; // Select PCINT 9.
+	PCMSK1 = 0b00000011; // Select PCINT 9 and 8.
     
     SREG |= 0b10000000;	
 }
@@ -144,7 +148,7 @@ void initTIMER(void){
 
 void init(void){
 	initLED();
-    //initANA();
+    initANA();
 	initPWM();
     initUSART(MYUBRR);
     initINT();
@@ -153,7 +157,7 @@ void init(void){
 
 
 
-void switchLED(int led){
+void toggleLED(int led){
 	if(led == 0){
 		PORTC = PORTC ^ (1 << LEDC1);
 	}
@@ -186,47 +190,47 @@ void setPWM(int value){
 
 
 int readAIn(void){
-        // Init analogue in
-	ADMUX = 0b01100010;
+    // Init analogue in
     ADCSRA |= (1<< ADSC);
 
-    while(ADCSRA & (1 << ADSC)); //funkar för jonte
-    // while((ADCSRA >> ADSC) && 1);
+    while(ADCSRA & (1 << ADSC)); 
 	
     return ADCH;
 }
 
-int32_t fixedDiv(int32_t n, int32_t d){		//Scaled down(normal) numbers as arguments.
-	  return ((int32_t)n * (1 << 6)) / d;
+
+
+int32_t scaledDiv(int32_t n, int32_t d){		//Scaled down(normal) numbers as arguments.
+	return (n << int_scale) / d;
 }
   
-int fixedMulti(int32_t f1, int32_t f2){	//Scaled up numbers as arguments.
-	   return (f1*f2) / (1 << 6);// << 6;//;
+int32_t scaledMul(int32_t f1, int32_t f2){	//Scaled up numbers as arguments.
+	   return ((f1*f2) >> int_scale); // << 6;//;
 }
 
-unsigned char scaleDown(int x){
-	return x >> 6;
+int32_t scaleDown(int32_t x){
+	return x >> int_scale;
 }
 
-int scaleDownI(int32_t x){
-	return x >> 6;
+int32_t scaleUp(int32_t x){
+	return x << int_scale;
 }
 
-int32_t scaleUp(int x){
-	return x << 6;
-}
+
 
 
 void updateSpeed(){
-	if(newPulse){ 
-		for(int i=0; i<mov_avg_size; ++i){
-			total +=cycles[i];
+	if(flag_recieved_interrupt){ 
+		for(int i=0; i<filter_len; ++i){
+			cycles_total += cycles[i];
 		}
-		speed = scaleDown(fixedDiv(78125, scaleDownI(fixedDiv(total, mov_avg_size))))*2;
-		total = 0;
-		//speed = scaleDown((fixedMulti(61, scaleUp(speed)) + fixedMulti(3, fixedDiv(78125, cycles)))); //0.95*2^6=61, 0.05*2^6=3 (sum =2^6)
-													//1MHz, 96 pulses per rev, 8 prescaler => 1000000*60/(96*8) =78125
-		newPulse = false;
+		
+  
+        speed = (unsigned char)scaleDown(scaledDiv(78125, scaleDown(scaledDiv(cycles_total, filter_len)))) *2;
+
+        cycles_total = 0;
+		
+        flag_recieved_interrupt = false;
 	}															
 
 }
@@ -239,20 +243,24 @@ unsigned char executeCommand(unsigned char com){
 	switch(com){
 
 		case 'a':  //Get speed
-
-
             sprintf(snum, "%d", speed);
 			USART_sendString(snum);
 			break;
 		
 		case 'b':  //Set speed
-			speedSetpoint = (uint8_t)USART_Receive();
-            sprintf(snum, "%d", speedSetpoint);
+			speed_setpoint = (uint8_t)USART_Receive();
+            int local_setpoint = speed_setpoint + tune;
+            if(local_setpoint < 0){
+                local_setpoint = 0;
+            }
+            sprintf(snum, "%d", local_setpoint);
 			USART_sendString(snum);
 			break;
 						
 		case 'c':	//Test
-			USART_sendString("test\n\r");
+            sprintf(snum, "%d", tune);
+			USART_sendString(snum);
+            //USART_Transmit((readAIn());
 			break;
 
         default:
@@ -262,43 +270,52 @@ unsigned char executeCommand(unsigned char com){
 	return 0;
 }
 
-void speedPI2(unsigned char setpoint){
-    switchLED(1);
 
-	if(updatePI){
-		if(setpoint == 0){
+
+void speedPI(unsigned char setpoint){
+    toggleLED(1);
+
+	if(flag_update_controller){
+		if(setpoint <= 0){
 			setPWM(0);
+            speed = 0;
+
 		}else{
-			int Kp = 16;
-			int p = 0;
+
 			int error = setpoint - speed;
+
 			if(error < 0){
 				p = 0;
-				}else{
-				p = fixedMulti(Kp, scaleUp(error));
-			}
-			int Ki = 4;
+			}else{
+				//p =  (( Kp * (error << int_scale)) >> int_scale);
+                p = scaledMul(Kp, scaleUp(error));
+            }
+
 			if(error < 0){
-				i -= fixedMulti(Ki, scaleUp(-error));
-				}else{
-				i += fixedMulti(Ki, scaleUp(error));
-			}
-			if(i > scaleUp(255)- p){
+
+                i -= scaledMul(Ki, scaleUp(-error));
+            }else{
+
+                i += scaledMul(Ki, scaleUp(error));
+            }
+			
+            int scaled_max = (255 << int_scale);
+
+            if(i > scaleUp(255) - p){
 				i = scaleUp(255)-p;
-				} else if(i<-scaleUp(255)-p){
+
+			} else if(i<-scaleUp(255)-p){
 				i = -scaleUp(255)-p;
 			}
 			
-			setPWM(scaleDown(p + i));
+			setPWM((unsigned char)scaleDown(p + i));
 		}
-		updatePI = false;
+		flag_update_controller = false;
 	}
 }
 
 int fineTuning(){
-	int tune = scaleDownI(fixedDiv(readAIn()*21,256))-10;
-	test = scaleDownI(fixedDiv(readAIn()*21,256));
-	return tune;
+    return scaleDown(scaledDiv(readAIn()*21,256))-10;
 }
 
 
@@ -306,24 +323,25 @@ int fineTuning(){
 int main(void){
     init();
 
-    switchLED(2);
+    toggleLED(2);
 
     setPWM(0);
 
     while(1){
 
-        switchLED(0);
+        toggleLED(0);
 		command = getCommand();
-        switchLED(0);
+        toggleLED(0);
 
         updateSpeed();
 
         command = executeCommand(command);
 
-		speedPI2(speedSetpoint);// + tune);
+        tune = fineTuning();
+		speedPI(speed_setpoint + tune);
 	}
 
-    switchLED(2);
+    toggleLED(2);
 	
 	return 0;
 
@@ -331,15 +349,14 @@ int main(void){
 
 
 
+
 void initUSART( unsigned int ubrr)
 {
-	/*Set baud rate */
 	UBRR0H = (unsigned char)(ubrr>>8);
 	UBRR0L = (unsigned char)ubrr;
-	/*Enable receiver and transmitter */
+
 	UCSR0B = (1<<RXEN0)|(1<<TXEN0);
 
-	/* Set frame format: 8data, 2stop bit */
 	UCSR0C = (1<<USBS0)|(3<<UCSZ00);
 }
 
