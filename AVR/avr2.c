@@ -53,6 +53,7 @@ unsigned char command;
 
 unsigned char speed = 0;
 unsigned char speed_setpoint = 0;
+unsigned char final_speed_setpoint = 0;
 
 int cycles[filter_len] =  {0};
 int cycles_pointer = 0;
@@ -94,7 +95,7 @@ ISR(PCINT1_vect){
 }
 
 ISR(TIMER2_COMPA_vect){
-	flag_update_controller = true;
+	speedPI(final_speed_setpoint);
 	TCNT2 = 0;
 }
 
@@ -226,7 +227,7 @@ void updateSpeed(){
 		}
 		
   
-        speed = (unsigned char)scaleDown(scaledDiv(78125, scaleDown(scaledDiv(cycles_total, filter_len)))) ;
+        speed = (unsigned char)scaleDown(scaledDiv(78125, scaleDown(scaledDiv(cycles_total, filter_len)))) *2;
 
         cycles_total = 0;
 		
@@ -275,43 +276,40 @@ unsigned char executeCommand(unsigned char com){
 void speedPI(unsigned char setpoint){
     toggleLED(1);
 
-	if(flag_update_controller){
-		if(setpoint <= 0){
-			setPWM(0);
-            speed = 0;
+    if(setpoint <= 0){
+        setPWM(0);
+        speed = 0;
 
-		}else{
+    }else{
 
-			int error = setpoint - speed;
+        int error = setpoint - speed;
 
-			if(error < 0){
-				p = 0;
-			}else{
-				//p =  (( Kp * (error << int_scale)) >> int_scale);
-                p = scaledMul(Kp, scaleUp(error));
-            }
+        if(error < 0){
+            p = 0;
+        }else{
+            //p =  (( Kp * (error << int_scale)) >> int_scale);
+            p = scaledMul(Kp, scaleUp(error));
+        }
 
-			if(error < 0){
+        if(error < 0){
 
-                i -= scaledMul(Ki, scaleUp(-error));
-            }else{
+            i -= scaledMul(Ki, scaleUp(-error));
+        }else{
 
-                i += scaledMul(Ki, scaleUp(error));
-            }
-			
-            int scaled_max = (255 << int_scale);
+            i += scaledMul(Ki, scaleUp(error));
+        }
+        
+        int scaled_max = (255 << int_scale);
 
-            if(i > scaleUp(255) - p){
-				i = scaleUp(255)-p;
+        if(i > scaleUp(255) - p){
+            i = scaleUp(255)-p;
 
-			} else if(i<-scaleUp(255)-p){
-				i = -scaleUp(255)-p;
-			}
-			
-			setPWM((unsigned char)scaleDown(p + i));
-		}
-		flag_update_controller = false;
-	}
+        } else if(i<-scaleUp(255)-p){
+            i = -scaleUp(255)-p;
+        }
+        
+        setPWM((unsigned char)scaleDown(p + i));
+    }
 }
 
 int fineTuning(){
@@ -342,7 +340,8 @@ int main(void){
             tune = 0;
             speed_setpoint = 0;
         }
-		speedPI(speed_setpoint + tune);
+
+        final_speed_setpoint = tune + speed_setpoint;
 	}
 
     toggleLED(2);
